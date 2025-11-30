@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web txt reader 文本阅读器</title>
+    <style>
+        :root {
+            /* --- 核心变量 --- */
+            --bg-color: #F9F9F9;
+            --text-color: #222;
+            --accent-color: #007AFF;
+            --bar-bg: rgba(255, 255, 255, 0.85);
+            --border-color: rgba(0,0,0,0.08);
+            
+            /* --- 排版变量 --- */
+            --font-size: 19px;
+            --line-height: 1.8;
+            --max-width: 800px;
+            
+            /* --- 字体栈 --- */
+            --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+            --font-serif: "Songti SC", "SimSun", "Times New Roman", serif;
+            --font-kaiti: "Kaiti SC", "KaiTi", "STKaiti", serif;
+            --active-font: var(--font-sans);
+
+            /* --- 动效曲线 --- */
+            --ease-out: cubic-bezier(0.165, 0.84, 0.44, 1);
+            --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+            
+            --safe-area-top: env(safe-area-inset-top);
+            --safe-area-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* 主题定义 */
+        body.theme-light { --bg-color: #F9F9F9; --text-color: #222; --bar-bg: rgba(255,255,255,0.85); }
+        body.theme-warm { --bg-color: #F6F1E3; --text-color: #5D4F42; --bar-bg: rgba(246,241,227,0.9); }
+        body.theme-dark { --bg-color: #121212; --text-color: #b0b0b0; --bar-bg: rgba(25,25,25,0.9); --border-color: rgba(255,255,255,0.1); }
+        body.theme-green { --bg-color: #CBE6CF; --text-color: #1a3b22; --bar-bg: rgba(203,230,207,0.9); }
+
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }
+        
+        body, html {
+            margin: 0; padding: 0; height: 100%; width: 100%;
+            background-color: var(--bg-color); color: var(--text-color);
+            font-family: var(--active-font); 
+            overflow: hidden;
+            transition: background 0.4s var(--ease-out), color 0.3s ease; 
+        }
+
+        /* --- 1. 书架视图 --- */
+        #shelf-view {
+            position: absolute; inset: 0; z-index: 10;
+            padding: 20px; overflow-y: auto;
+            background: var(--bg-color);
+            transition: transform 0.4s var(--ease-out), opacity 0.4s;
+        }
+        #shelf-view.hidden { transform: scale(0.95); opacity: 0; pointer-events: none; }
+
+        .shelf-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-top: 40px; margin-bottom: 30px;
+            padding: 0 10px;
+        }
+        .app-title { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+        
+        .import-group { display: flex; gap: 8px; align-items: center; }
+        .encoding-select {
+            padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.05); font-size: 12px; color: var(--text-color);
+            font-family: inherit; margin-right: 5px;
+        }
+        
+        /* 按钮通用样式 */
+        .header-btn {
+            background: rgba(0,0,0,0.05); color: var(--text-color);
+            border: 1px solid var(--border-color);
+            width: 36px; height: 36px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .header-btn:active { transform: scale(0.92); background: rgba(0,0,0,0.1); }
+        .header-btn svg { width: 18px; height: 18px; fill: currentColor; opacity: 0.7; }
+
+        .btn-add {
+            background: var(--text-color); color: var(--bg-color); border: none;
+            width: 40px; height: 40px; border-radius: 50%;
+            font-size: 24px; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            margin-left: 5px;
+        }
+
+        .book-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 25px 20px; padding-bottom: 100px; }
+        .book-item { text-align: center; cursor: pointer; position: relative; animation: fadeIn 0.5s ease; }
+        .book-cover {
+            aspect-ratio: 2/3; border-radius: 12px; background: #ddd; margin-bottom: 12px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.08); position: relative; overflow: hidden;
+            border: 1px solid rgba(0,0,0,0.04); transition: transform 0.2s;
+        }
+        .book-item:active .book-cover { transform: scale(0.96); }
+        .book-title { font-size: 13px; font-weight: 600; line-height: 1.4; height: 2.8em; overflow: hidden; opacity: 0.9; }
+        .delete-btn {
+            position: absolute; top: -8px; right: -8px; background: #FF3B30; color: white;
+            width: 24px; height: 24px; border-radius: 50%; font-size: 16px; line-height: 24px;
+            display: none; z-index: 2; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .book-item.editing .delete-btn { display: block; }
+
+        /* --- 2. 阅读视图 --- */
+        #reader-view {
+            position: absolute; inset: 0; z-index: 20;
+            background: var(--bg-color);
+            display: flex; flex-direction: column;
+            transform: translateX(100%); 
+            transition: transform 0.4s var(--ease-out);
+            box-shadow: -10px 0 40px rgba(0,0,0,0.1);
+        }
+        #reader-view.active { transform: translateX(0); }
+
+        /* 阅读区域 */
+        #reader-scroll {
+            flex: 1; overflow-y: auto; overflow-x: hidden;
+            padding: 20px 20px 60px 20px;
+            scroll-behavior: auto; -webkit-overflow-scrolling: touch;
+        }
+        
+        #chapter-content {
+            max-width: var(--max-width); margin: 0 auto;
+            font-size: var(--font-size);
+            line-height: var(--line-height);
+            text-align: justify;
+            white-space: pre-wrap;
+            min-height: 80vh;
+            transition: font-family 0.3s ease, font-size 0.3s ease, width 0.3s;
+        }
+        
+        .fade-in-text { animation: textFadeIn 0.6s ease forwards; opacity: 0; }
+        @keyframes textFadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        #chapter-content h2 {
+            font-size: 1.5em; color: var(--accent-color);
+            margin: 40px 0 30px 0; font-weight: 700;
+            line-height: 1.3;
+        }
+        
+        #chapter-content p { margin-bottom: 1.2em; text-indent: 2em; }
+
+        /* 翻页按钮区 */
+        .nav-buttons {
+            display: flex; justify-content: space-between; gap: 20px;
+            max-width: var(--max-width); margin: 50px auto 30px;
+        }
+        .nav-btn {
+            flex: 1; padding: 16px; border-radius: 14px; border: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.03); color: var(--text-color); font-weight: 600;
+            text-align: center; cursor: pointer; transition: background 0.2s;
+        }
+        .nav-btn:active { background: rgba(0,0,0,0.08); transform: scale(0.98); }
+
+        /* 菜单栏 (Header & Footer) */
+        .bar {
+            position: fixed; left: 0; right: 0;
+            background: var(--bar-bg); 
+            backdrop-filter: blur(25px) saturate(180%); -webkit-backdrop-filter: blur(25px) saturate(180%);
+            transition: transform 0.3s var(--ease-out); z-index: 100;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 16px; border-top: 1px solid var(--border-color);
+            color: var(--text-color);
+        }
+        
+        .top-bar {
+            top: 0; height: calc(50px + var(--safe-area-top));
+            padding-top: var(--safe-area-top);
+            border-bottom: 1px solid var(--border-color); border-top: none;
+            transform: translateY(-100%);
+        }
+        
+        .bottom-bar {
+            bottom: 0; height: calc(60px + var(--safe-area-bottom));
+            padding-bottom: var(--safe-area-bottom);
+            transform: translateY(100%);
+        }
+
+        .menus-visible .top-bar, .menus-visible .bottom-bar { transform: translateY(0); }
+
+        .icon-btn {
+            background: transparent; border: none; padding: 10px;
+            color: inherit; cursor: pointer; display: flex; align-items: center;
+            opacity: 0.8; transition: opacity 0.2s;
+        }
+        .icon-btn:active { opacity: 0.4; }
+        .icon-btn svg { width: 24px; height: 24px; fill: currentColor; }
+        
+        .chapter-title-nav { 
+            font-size: 15px; font-weight: 600; max-width: 60%; 
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+            opacity: 0.9;
+        }
+
+        /* --- 侧边栏 (目录/搜索) --- */
+        #sidebar {
+            position: fixed; inset: 0; z-index: 200; pointer-events: none;
+        }
+        #sidebar-bg {
+            position: absolute; inset: 0; background: rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.3s;
+            backdrop-filter: blur(3px);
+        }
+        #sidebar-panel {
+            position: absolute; top: 0; bottom: 0; left: 0; width: 85%; max-width: 320px;
+            background: var(--bg-color); transform: translateX(-100%);
+            transition: transform 0.4s var(--ease-spring); 
+            display: flex; flex-direction: column;
+            box-shadow: 5px 0 30px rgba(0,0,0,0.15);
+        }
+        
+        #sidebar.active { pointer-events: auto; }
+        #sidebar.active #sidebar-bg { opacity: 1; }
+        #sidebar.active #sidebar-panel { transform: translateX(0); }
+
+        .sidebar-tabs { display: flex; border-bottom: 1px solid var(--border-color); padding: 5px 0; }
+        .tab-btn { 
+            flex: 1; padding: 12px; text-align: center; font-weight: 600; opacity: 0.5; font-size: 14px; 
+            position: relative; cursor: pointer;
+        }
+        .tab-btn.active { opacity: 1; color: var(--accent-color); }
+        .tab-btn.active::after {
+            content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+            width: 20px; height: 3px; background: var(--accent-color); border-radius: 2px;
+        }
+
+        .sidebar-content { flex: 1; overflow-y: auto; }
+        .toc-item, .search-item {
+            padding: 14px 20px; border-bottom: 1px solid var(--border-color);
+            font-size: 14px; cursor: pointer; transition: background 0.2s;
+        }
+        .toc-item:active { background: rgba(0,0,0,0.05); }
+        .toc-item.active { color: var(--accent-color); font-weight: bold; }
+        
+        .search-box-container { padding: 15px; border-bottom: 1px solid var(--border-color); }
+        #search-input {
+            width: 100%; padding: 10px 12px; border-radius: 10px; border: none;
+            background: rgba(120,120,120,0.1); color: inherit; font-size: 14px;
+        }
+
+        /* --- 设置面板 --- */
+        #settings-panel {
+            position: fixed; bottom: 85px; left: 50%; transform: translateX(-50%) translateY(20px);
+            width: 92%; max-width: 380px; background: var(--bar-bg);
+            backdrop-filter: blur(40px) saturate(180%);
+            border-radius: 24px; padding: 24px; 
+            box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+            opacity: 0; pointer-events: none; transition: all 0.4s var(--ease-spring); z-index: 150;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        #settings-panel.active { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+
+        .set-section { margin-bottom: 20px; }
+        .set-header { font-size: 12px; color: #888; margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px; }
+        
+        .set-row { display: flex; justify-content: space-between; gap: 10px; }
+        
+        /* 字体按钮 */
+        .font-opt-btn {
+            flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.03); cursor: pointer; text-align: center;
+            font-size: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 50px; transition: all 0.2s;
+        }
+        .font-opt-btn.active { border-color: var(--accent-color); background: var(--bg-color); box-shadow: 0 4px 12px rgba(0,0,0,0.05); color: var(--accent-color); }
+        
+        /* 通用设置按钮 */
+        .set-btn { 
+            flex: 1; padding: 12px; border-radius: 12px; border: 1px solid var(--border-color); 
+            background: rgba(0,0,0,0.03); cursor: pointer; text-align: center; font-weight: 600;
+        }
+        .set-btn:active { background: rgba(0,0,0,0.08); transform: scale(0.98); }
+
+        /* 主题球 */
+        .theme-dot { 
+            flex:1; height: 44px; border-radius: 12px; border: 2px solid transparent; 
+            cursor: pointer; position: relative; box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            transition: transform 0.2s;
+        }
+        .theme-dot:active { transform: scale(0.9); }
+        .theme-dot.selected { border-color: var(--accent-color); }
+
+        /* Loading */
+        #loading {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.2); z-index: 999;
+            display: none; align-items: center; justify-content: center; color: white;
+            font-weight: bold; backdrop-filter: blur(5px);
+        }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="theme-light">
+
+    <div id="loading">处理中...</div>
+
+    <div id="shelf-view">
+        <div class="shelf-header">
+            <div class="app-title">AirRead</div>
+            <div class="import-group">
+                <select id="encoding-select" class="encoding-select">
+                    <option value="utf-8">UTF-8</option>
+                    <option value="gbk">GBK (TXT常用)</option>
+                    <option value="big5">Big5</option>
+                </select>
+                
+                <button class="header-btn" onclick="exportBackup()" title="导出备份 (含进度)">
+                    <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                </button>
+                
+                <button class="header-btn" onclick="document.getElementById('backup-input').click()" title="恢复备份">
+                    <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+                </button>
+
+                <button class="header-btn btn-add" onclick="document.getElementById('file-input').click()" title="导入TXT书籍">+</button>
+            </div>
+        </div>
+        <div id="book-list" class="book-list"></div>
+        <div id="empty-tip" style="text-align:center; padding-top:100px; opacity:0.5; display:none">
+            暂无书籍，点击右上角 + 导入<br>或点击上传图标恢复备份
+        </div>
+        
+        <input type="file" id="file-input" accept=".txt" style="display:none" multiple onchange="handleImport(this)">
+        
+        <input type="file" id="backup-input" accept=".json" style="display:none" onchange="importBackup(this)">
+    </div>
+
+    <div id="reader-view">
+        <div class="bar top-bar">
+            <button class="icon-btn" onclick="closeBook()">
+                <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            </button>
+            <div class="chapter-title-nav" id="nav-title">未命名</div>
+            <button class="icon-btn" onclick="toggleSidebar('search')">
+                <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            </button>
+        </div>
+
+        <div id="reader-scroll" onclick="toggleMenu()">
+            <div id="chapter-content"></div>
+            <div class="nav-buttons">
+                <div class="nav-btn" onclick="event.stopPropagation(); prevChapter()">上一章</div>
+                <div class="nav-btn" onclick="event.stopPropagation(); nextChapter()">下一章</div>
+            </div>
+        </div>
+
+        <div class="bar bottom-bar">
+            <button class="icon-btn" onclick="toggleSidebar('toc')">
+                <svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 5h2v-2H3v2zm0-9h2V7H3v2zm3 2h13v-2H6v2zm0-9v2h13V4H6zm0 14h13v-2H6v2z"/></svg>
+            </button>
+            <span style="font-size:12px; opacity:0.6; font-variant-numeric: tabular-nums;" id="progress-text">0%</span>
+            <button class="icon-btn" onclick="toggleSettings()">
+                <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <div id="sidebar-bg" onclick="closeSidebar()"></div>
+        <div id="sidebar-panel">
+            <div class="sidebar-tabs">
+                <div class="tab-btn" id="tab-toc" onclick="switchTab('toc')">目录</div>
+                <div class="tab-btn" id="tab-search" onclick="switchTab('search')">搜索</div>
+            </div>
+            
+            <div id="panel-toc" class="sidebar-content" style="display:block">
+                <div id="toc-container"></div>
+            </div>
+            
+            <div id="panel-search" class="sidebar-content" style="display:none">
+                <div class="search-box-container">
+                    <input type="text" id="search-input" placeholder="输入关键词 (回车搜索)" onkeydown="if(event.keyCode===13) doSearch()">
+                </div>
+                <div id="search-results"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-panel">
+        
+        <div class="set-section">
+            <div class="set-header">字体风格</div>
+            <div class="set-row">
+                <div class="font-opt-btn active" id="font-sans" onclick="setFont('sans')">
+                    <span style="font-family:var(--font-sans); font-size:16px;">Aa</span>
+                    <span style="font-size:10px;margin-top:2px;">黑体</span>
+                </div>
+                <div class="font-opt-btn" id="font-serif" onclick="setFont('serif')">
+                    <span style="font-family:var(--font-serif); font-size:16px; font-weight:bold;">Aa</span>
+                    <span style="font-size:10px;margin-top:2px;">宋体</span>
+                </div>
+                <div class="font-opt-btn" id="font-kaiti" onclick="setFont('kaiti')">
+                    <span style="font-family:var(--font-kaiti); font-size:16px;">Aa</span>
+                    <span style="font-size:10px;margin-top:2px;">楷体</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="set-section">
+            <div class="set-header">背景主题</div>
+            <div class="set-row">
+                <div class="theme-dot" id="theme-light" style="background:#F9F9F9; border:1px solid #ddd" onclick="setTheme('light')"></div>
+                <div class="theme-dot" id="theme-warm" style="background:#F6F1E3" onclick="setTheme('warm')"></div>
+                <div class="theme-dot" id="theme-green" style="background:#CBE6CF" onclick="setTheme('green')"></div>
+                <div class="theme-dot" id="theme-dark" style="background:#1a1a1a" onclick="setTheme('dark')"></div>
+            </div>
+        </div>
+        
+        <div class="set-section">
+            <div class="set-header">显示调节</div>
+            <div class="set-row" style="margin-bottom:10px">
+                <div class="set-btn" onclick="adjFont(-2)">A-</div>
+                <div class="set-btn" onclick="adjFont(2)">A+</div>
+            </div>
+            <div class="set-row">
+                <div class="set-btn" onclick="adjWidth(-100)">变窄</div>
+                <div class="set-btn" onclick="adjWidth(100)">变宽</div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 核心逻辑 ---
+        const DB_NAME = 'AirReadProDB';
+        const STORE_NAME = 'books_v2'; 
+        let db;
+        let currentBook = null;
+        let currentSettings = { fontSize: 19, theme: 'light', maxWidth: 800, fontType: 'sans' };
+
+        const $ = id => document.getElementById(id);
+
+        // --- 数据库 ---
+        function initDB() {
+            const req = indexedDB.open(DB_NAME, 2);
+            req.onupgradeneeded = e => {
+                const d = e.target.result;
+                if(!d.objectStoreNames.contains(STORE_NAME)) d.createObjectStore(STORE_NAME, {keyPath:'id'});
+            };
+            req.onsuccess = e => { db = e.target.result; renderShelf(); };
+        }
+
+        // --- 解析器 (智能章节识别) ---
+        function parseBook(title, text) {
+            const lines = text.split(/\r?\n/);
+            const chapters = [];
+            // 兼容性极强的正则：前置空格、第x章、Chapter、卷、序、引子
+            const titleRegex = /^\s*(?:第[0-9一二三四五六七八九十百千两]+[章回节卷集]|Chapter\s*\d+|序章|前言|引子|End|尾声)/i;
+            
+            let currentContent = [];
+            let currentTitle = "开始";
+
+            for(let i=0; i<lines.length; i++) {
+                const line = lines[i];
+                // 限制标题长度防止误判长句
+                if(titleRegex.test(line) && line.length < 50) {
+                    if(currentContent.length > 0) {
+                        chapters.push({ title: currentTitle, content: currentContent.join('\n') });
+                    }
+                    currentTitle = line.trim();
+                    currentContent = [];
+                } else {
+                    currentContent.push(line);
+                }
+            }
+            if(currentContent.length > 0) chapters.push({ title: currentTitle, content: currentContent.join('\n') });
+            
+            if(chapters.length === 0) chapters.push({ title: title, content: text });
+
+            return {
+                id: Date.now(),
+                title: title,
+                chapters: chapters,
+                chapterIndex: 0,
+                scrollPos: 0,
+                addedAt: new Date()
+            };
+        }
+
+        // --- 导入与书架 ---
+        function handleImport(input) {
+            const files = input.files;
+            if(!files.length) return;
+            const encoding = $('encoding-select').value;
+            $('loading').style.display = 'flex';
+            
+            let p = Promise.resolve();
+            Array.from(files).forEach(f => {
+                p = p.then(() => new Promise(resolve => {
+                    const reader = new FileReader();
+                    reader.onload = e => {
+                        // 稍微延迟确保ID不冲突
+                        setTimeout(() => {
+                            const book = parseBook(f.name.replace('.txt',''), e.target.result);
+                            const tx = db.transaction(STORE_NAME, 'readwrite');
+                            tx.objectStore(STORE_NAME).put(book);
+                            tx.oncomplete = () => resolve();
+                        }, 50);
+                    };
+                    reader.readAsText(f, encoding);
+                }));
+            });
+
+            p.then(() => {
+                $('loading').style.display = 'none';
+                renderShelf();
+                input.value = '';
+            });
+        }
+
+        function renderShelf() {
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const req = tx.objectStore(STORE_NAME).getAll();
+            req.onsuccess = () => {
+                const list = $('book-list');
+                list.innerHTML = '';
+                const books = req.result.sort((a,b) => b.addedAt - a.addedAt);
+                
+                $('empty-tip').style.display = books.length ? 'none' : 'block';
+
+                books.forEach(b => {
+                    const div = document.createElement('div');
+                    div.className = 'book-item';
+                    const hue = (b.id % 360); 
+                    // 计算进度百分比
+                    const pct = Math.round(((b.chapterIndex||0) + 1) / (b.chapters.length||1) * 100);
+                    
+                    div.innerHTML = `
+                        <div class="delete-btn" onclick="event.stopPropagation(); deleteBook(${b.id})">×</div>
+                        <div class="book-cover" style="background: linear-gradient(135deg, hsl(${hue},60%,92%), hsl(${hue+30},60%,85%))">
+                            <div style="position:absolute;bottom:10px;left:10px;right:10px;font-size:10px;opacity:0.4;text-align:left;font-weight:700">TXT</div>
+                            <div style="position:absolute;top:10px;right:10px;font-size:10px;background:rgba(0,0,0,0.1);padding:2px 6px;border-radius:4px;color:#555">${pct}%</div>
+                        </div>
+                        <div class="book-title">${b.title}</div>
+                    `;
+                    div.onclick = () => openBook(b.id);
+                    
+                    let timer;
+                    const start = () => timer = setTimeout(() => div.classList.add('editing'), 800);
+                    const end = () => clearTimeout(timer);
+                    div.addEventListener('touchstart', start);
+                    div.addEventListener('touchend', end);
+                    div.addEventListener('mousedown', start);
+                    div.addEventListener('mouseup', end);
+                    
+                    list.appendChild(div);
+                });
+            };
+        }
+
+        function deleteBook(id) {
+            if(confirm('确认删除？')) {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                tx.objectStore(STORE_NAME).delete(id);
+                tx.oncomplete = renderShelf;
+            }
+        }
+
+        // --- 新增功能：导出备份 (含进度) ---
+        function exportBackup() {
+            $('loading').style.display = 'flex';
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            tx.objectStore(STORE_NAME).getAll().onsuccess = e => {
+                const allData = e.target.result;
+                if(!allData || allData.length === 0) {
+                    alert('书架是空的，无法备份');
+                    $('loading').style.display = 'none';
+                    return;
+                }
+                
+                // 转换为JSON字符串
+                const jsonStr = JSON.stringify(allData);
+                const blob = new Blob([jsonStr], {type: 'application/json'});
+                const url = URL.createObjectURL(blob);
+                
+                // 创建下载链接
+                const a = document.createElement('a');
+                a.href = url;
+                const date = new Date();
+                const timeStr = `${date.getFullYear()}${date.getMonth()+1}${date.getDate()}`;
+                a.download = `AirRead_Backup_${timeStr}.json`;
+                document.body.appendChild(a);
+                a.click();
+                
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                $('loading').style.display = 'none';
+            };
+        }
+
+        // --- 新增功能：导入备份 (恢复进度) ---
+        function importBackup(input) {
+            const file = input.files[0];
+            if(!file) return;
+            
+            $('loading').style.display = 'flex';
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if(!Array.isArray(data)) throw new Error('格式不正确');
+                    
+                    const tx = db.transaction(STORE_NAME, 'readwrite');
+                    const store = tx.objectStore(STORE_NAME);
+                    
+                    // 批量写入，如果ID相同则更新进度
+                    data.forEach(book => store.put(book));
+                    
+                    tx.oncomplete = () => {
+                        $('loading').style.display = 'none';
+                        alert(`成功恢复了 ${data.length} 本书籍的进度！`);
+                        renderShelf();
+                        input.value = ''; // 重置input
+                    };
+                    
+                    tx.onerror = () => {
+                        throw new Error('数据库写入失败');
+                    };
+                } catch(err) {
+                    $('loading').style.display = 'none';
+                    alert('备份文件无效或损坏');
+                    console.error(err);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // --- 阅读核心逻辑 ---
+        function openBook(id) {
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            tx.objectStore(STORE_NAME).get(id).onsuccess = e => {
+                currentBook = e.target.result;
+                if(!currentBook) return;
+                
+                $('shelf-view').classList.add('hidden');
+                $('reader-view').classList.add('active');
+                
+                loadChapter(currentBook.chapterIndex || 0, currentBook.scrollPos || 0, false);
+                generateTOC();
+            };
+        }
+
+        function loadChapter(index, scrollTop = 0, animate = true) {
+            if(index < 0 || index >= currentBook.chapters.length) return;
+            
+            currentBook.chapterIndex = index;
+            const chapter = currentBook.chapters[index];
+            const contentDiv = $('chapter-content');
+            
+            // 构建HTML
+            const html = `<h2>${chapter.title}</h2>` + 
+                chapter.content.split('\n').map(p => p.trim() ? `<p>${p}</p>` : '').join('');
+            
+            contentDiv.innerHTML = html;
+            $('nav-title').innerText = chapter.title;
+            
+            // 动效处理
+            if(animate) {
+                contentDiv.classList.remove('fade-in-text');
+                void contentDiv.offsetWidth; // 触发重绘
+                contentDiv.classList.add('fade-in-text');
+            }
+
+            const scroller = $('reader-scroll');
+            scroller.scrollTop = scrollTop;
+            
+            updateProgress();
+            saveProgress();
+        }
+
+        function prevChapter() {
+            if(currentBook.chapterIndex > 0) {
+                loadChapter(currentBook.chapterIndex - 1);
+                $('reader-scroll').scrollTop = 0;
+            } else {
+                alert('已经是第一章了');
+            }
+        }
+
+        function nextChapter() {
+            if(currentBook.chapterIndex < currentBook.chapters.length - 1) {
+                loadChapter(currentBook.chapterIndex + 1);
+                $('reader-scroll').scrollTop = 0;
+            } else {
+                alert('已经是最后一章了');
+            }
+        }
+
+        function updateProgress() {
+            const pct = Math.round(((currentBook.chapterIndex + 1) / currentBook.chapters.length) * 100);
+            $('progress-text').innerText = `${pct}%`;
+        }
+
+        function saveProgress() {
+            if(!currentBook) return;
+            currentBook.scrollPos = $('reader-scroll').scrollTop;
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            tx.objectStore(STORE_NAME).put(currentBook);
+        }
+
+        function closeBook() {
+            saveProgress();
+            $('shelf-view').classList.remove('hidden');
+            $('reader-view').classList.remove('active');
+            document.body.classList.remove('menus-visible');
+            renderShelf(); // 更新封面上的进度显示
+        }
+
+        // --- 侧边栏与搜索 ---
+        function toggleSidebar(tab) {
+            $('sidebar').classList.add('active');
+            switchTab(tab);
+            document.body.classList.remove('menus-visible');
+        }
+        
+        function closeSidebar() {
+            $('sidebar').classList.remove('active');
+        }
+
+        function switchTab(tab) {
+            $('tab-toc').classList.toggle('active', tab==='toc');
+            $('tab-search').classList.toggle('active', tab==='search');
+            $('panel-toc').style.display = tab==='toc' ? 'block' : 'none';
+            $('panel-search').style.display = tab==='search' ? 'block' : 'none';
+            if(tab === 'search') setTimeout(() => $('search-input').focus(), 100);
+        }
+
+        function generateTOC() {
+            const container = $('toc-container');
+            container.innerHTML = '';
+            const frag = document.createDocumentFragment();
+            currentBook.chapters.forEach((ch, i) => {
+                const div = document.createElement('div');
+                div.className = `toc-item ${i === currentBook.chapterIndex ? 'active' : ''}`;
+                div.innerText = ch.title;
+                div.onclick = () => {
+                    loadChapter(i);
+                    closeSidebar();
+                };
+                frag.appendChild(div);
+            });
+            container.appendChild(frag);
+        }
+
+        function doSearch() {
+            const key = $('search-input').value.trim();
+            if(!key) return;
+            const resultsDiv = $('search-results');
+            resultsDiv.innerHTML = '<div style="padding:20px;color:#999;text-align:center">搜索中...</div>';
+            
+            setTimeout(() => {
+                const results = [];
+                currentBook.chapters.forEach((ch, idx) => {
+                    if(ch.content.includes(key)) {
+                        const i = ch.content.indexOf(key);
+                        const snippet = ch.content.substr(Math.max(0, i - 10), 30);
+                        results.push({ idx, title: ch.title, snippet });
+                    }
+                });
+
+                if(results.length === 0) {
+                    resultsDiv.innerHTML = '<div style="padding:20px;color:#999;text-align:center">未找到相关内容</div>';
+                } else {
+                    resultsDiv.innerHTML = '';
+                    results.forEach(r => {
+                        const div = document.createElement('div');
+                        div.className = 'search-item';
+                        div.innerHTML = `<div style="font-weight:bold;font-size:13px;margin-bottom:4px">${r.title}</div><div style="color:#666;font-size:12px;line-height:1.4">...${r.snippet}...</div>`;
+                        div.onclick = () => {
+                            loadChapter(r.idx);
+                            closeSidebar();
+                        };
+                        resultsDiv.appendChild(div);
+                    });
+                }
+            }, 50);
+        }
+
+        // --- UI 交互 ---
+        function toggleMenu() {
+            document.body.classList.toggle('menus-visible');
+            $('settings-panel').classList.remove('active');
+        }
+        
+        // 滚动时隐藏菜单
+        let lastScroll = 0;
+        $('reader-scroll').onscroll = (e) => {
+            if(Math.abs(e.target.scrollTop - lastScroll) > 50) {
+                document.body.classList.remove('menus-visible');
+                $('settings-panel').classList.remove('active');
+                lastScroll = e.target.scrollTop;
+            }
+        };
+
+        function toggleSettings() {
+            $('settings-panel').classList.toggle('active');
+        }
+
+        // --- 设置功能 ---
+        function applySettings() {
+            // Theme
+            document.body.className = `theme-${currentSettings.theme} menus-visible`;
+            document.querySelectorAll('.theme-dot').forEach(d => d.classList.remove('selected'));
+            $(`theme-${currentSettings.theme}`).classList.add('selected');
+            
+            // Font Size
+            document.documentElement.style.setProperty('--font-size', currentSettings.fontSize + 'px');
+            
+            // Width
+            document.documentElement.style.setProperty('--max-width', currentSettings.maxWidth + 'px');
+            
+            // Font Family
+            let fontVar = 'var(--font-sans)';
+            if(currentSettings.fontType === 'serif') fontVar = 'var(--font-serif)';
+            if(currentSettings.fontType === 'kaiti') fontVar = 'var(--font-kaiti)';
+            document.documentElement.style.setProperty('--active-font', fontVar);
+            
+            document.querySelectorAll('.font-opt-btn').forEach(b => b.classList.remove('active'));
+            $(`font-${currentSettings.fontType}`).classList.add('active');
+
+            localStorage.setItem('airread_settings_v2', JSON.stringify(currentSettings));
+        }
+
+        function setTheme(t) { currentSettings.theme = t; applySettings(); }
+        function adjFont(delta) { 
+            currentSettings.fontSize = Math.max(14, Math.min(32, currentSettings.fontSize + delta)); 
+            applySettings(); 
+        }
+        function adjWidth(delta) { 
+            currentSettings.maxWidth = Math.max(500, Math.min(1200, currentSettings.maxWidth + delta)); 
+            applySettings(); 
+        }
+        function setFont(type) { currentSettings.fontType = type; applySettings(); }
+
+        // 初始化
+        window.onload = () => {
+            initDB();
+            const saved = JSON.parse(localStorage.getItem('airread_settings_v2'));
+            if(saved) {
+                currentSettings = { ...currentSettings, ...saved };
+            }
+            applySettings();
+            
+            // 点击外部关闭设置
+            document.addEventListener('click', e => {
+                const panel = $('settings-panel');
+                const btn = document.querySelector('.icon-btn[onclick="toggleSettings()"]');
+                if(panel.classList.contains('active') && !panel.contains(e.target) && !btn.contains(e.target)) {
+                    panel.classList.remove('active');
+                }
+            });
+        };
+
+    </script>
+</body>
+</html>
